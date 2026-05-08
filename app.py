@@ -265,7 +265,6 @@ class VoxCPMDemo:
         model = voxcpm.VoxCPM.from_pretrained(
             self._model_id,
             optimize=True,
-            device=self.device,
         )
         if self.device == "cuda":
             torch.cuda.synchronize()
