@@ -208,10 +208,10 @@ UI. It loads the models before the server starts and streams raw float32 PCM
 chunks over HTTP to the browser Web Audio API.
 
 ```bash
-python3 app_fastapi.py --port 8809
+python3 app_fastapi.py
 ```
 
-Then open `http://localhost:8809`.
+Then open `http://localhost:8808`.
 
 ### CLI Usage
 

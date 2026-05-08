@@ -690,7 +690,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", type=str, default="openbmb/VoxCPM2")
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8809)
+    parser.add_argument("--port", type=int, default=8808)
     args = parser.parse_args()
 
     demo = VoxCPMFastAPIDemo(model_id=args.model_id)
