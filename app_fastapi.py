@@ -479,7 +479,8 @@ HTML = r"""
       referencePath: "",
       promptPath: "",
       chunkCount: 0,
-      sourceNodes: []
+      sourceNodes: [],
+      pendingPcmBytes: new Uint8Array(0)
     };
 
     function log(message) {
@@ -520,12 +521,13 @@ HTML = r"""
         try { node.stop(); } catch (_) {}
       });
       state.sourceNodes = [];
+      state.pendingPcmBytes = new Uint8Array(0);
     }
 
-    function schedulePcm(arrayBuffer) {
+    function schedulePcmBytes(bytes) {
       const ctx = state.audioCtx;
       if (!ctx) return;
-      const pcm = new Float32Array(arrayBuffer);
+      const pcm = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT);
       if (!pcm.length) return;
 
       const audioBuffer = ctx.createBuffer(1, pcm.length, state.sampleRate);
@@ -548,6 +550,24 @@ HTML = r"""
       const queuedMs = Math.max(0, state.nextStartTime - ctx.currentTime) * 1000;
       $("queuedAudio").textContent = `${Math.round(queuedMs)} ms`;
       $("meter").textContent = `Playing chunk ${state.chunkCount}`;
+    }
+
+    function processPcmChunk(chunk) {
+      let bytes = chunk;
+      if (state.pendingPcmBytes.byteLength) {
+        bytes = new Uint8Array(state.pendingPcmBytes.byteLength + chunk.byteLength);
+        bytes.set(state.pendingPcmBytes, 0);
+        bytes.set(chunk, state.pendingPcmBytes.byteLength);
+        state.pendingPcmBytes = new Uint8Array(0);
+      }
+
+      const completeLength = bytes.byteLength - (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT);
+      if (completeLength > 0) {
+        schedulePcmBytes(bytes.subarray(0, completeLength));
+      }
+      if (completeLength < bytes.byteLength) {
+        state.pendingPcmBytes = bytes.slice(completeLength);
+      }
     }
 
     async function uploadFile(input) {
@@ -663,9 +683,13 @@ HTML = r"""
             gotFirstChunk = true;
             $("firstLatency").textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(3)} s`;
           }
-          schedulePcm(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+          processPcmChunk(value);
         }
 
+        if (state.pendingPcmBytes.byteLength) {
+          log(`Dropped ${state.pendingPcmBytes.byteLength} trailing PCM byte(s).`);
+          state.pendingPcmBytes = new Uint8Array(0);
+        }
         $("totalTime").textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(3)} s`;
         log("Generation complete.");
         state.abortController = null;
