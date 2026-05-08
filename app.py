@@ -246,24 +246,33 @@ class VoxCPMDemo:
     def __init__(self, model_id: str = "openbmb/VoxCPM2") -> None:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Running on device: {self.device}")
+        self._model_id = model_id
 
         self.asr_model_id = "iic/SenseVoiceSmall"
+        logger.info(f"Loading ASR model: {self.asr_model_id}")
         self.asr_model: Optional[AutoModel] = AutoModel(
             model=self.asr_model_id,
             disable_update=True,
             log_level="DEBUG",
             device="cuda:0" if self.device == "cuda" else "cpu",
         )
+        logger.info("ASR model loaded successfully.")
 
-        self.voxcpm_model: Optional[voxcpm.VoxCPM] = None
-        self._model_id = model_id
+        self.voxcpm_model: voxcpm.VoxCPM = self._load_voxcpm_model()
+
+    def _load_voxcpm_model(self) -> voxcpm.VoxCPM:
+        logger.info(f"Loading model: {self._model_id}")
+        model = voxcpm.VoxCPM.from_pretrained(
+            self._model_id,
+            optimize=True,
+            device=self.device,
+        )
+        if self.device == "cuda":
+            torch.cuda.synchronize()
+        logger.info("Model loaded successfully.")
+        return model
 
     def get_or_load_voxcpm(self) -> voxcpm.VoxCPM:
-        if self.voxcpm_model is not None:
-            return self.voxcpm_model
-        logger.info(f"Loading model: {self._model_id}")
-        self.voxcpm_model = voxcpm.VoxCPM.from_pretrained(self._model_id, optimize=True)
-        logger.info("Model loaded successfully.")
         return self.voxcpm_model
 
     def prompt_wav_recognition(self, prompt_wav: Optional[str]) -> str:

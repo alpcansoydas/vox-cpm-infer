@@ -27,9 +27,8 @@ class VoxCPMDemo:
             device="cuda:0" if self.device == "cuda" else "cpu",
         )
 
-        # TTS model (lazy init)
-        self.voxcpm_model: Optional[voxcpm.VoxCPM] = None
         self.default_local_model_dir = "./models/VoxCPM1.5"
+        self.voxcpm_model: voxcpm.VoxCPM = self._load_voxcpm()
 
     # ---------- Model helpers ----------
     def _resolve_model_dir(self) -> str:
@@ -57,14 +56,17 @@ class VoxCPMDemo:
             return target_dir
         return "models"
 
-    def get_or_load_voxcpm(self) -> voxcpm.VoxCPM:
-        if self.voxcpm_model is not None:
-            return self.voxcpm_model
-        print("Model not loaded, initializing...", file=sys.stderr)
+    def _load_voxcpm(self) -> voxcpm.VoxCPM:
+        print("Loading VoxCPM model before starting Gradio...", file=sys.stderr)
         model_dir = self._resolve_model_dir()
         print(f"Using model dir: {model_dir}", file=sys.stderr)
-        self.voxcpm_model = voxcpm.VoxCPM(voxcpm_model_path=model_dir)
+        model = voxcpm.VoxCPM(voxcpm_model_path=model_dir, device=self.device)
+        if self.device == "cuda":
+            torch.cuda.synchronize()
         print("Model loaded successfully.", file=sys.stderr)
+        return model
+
+    def get_or_load_voxcpm(self) -> voxcpm.VoxCPM:
         return self.voxcpm_model
 
     # ---------- Functional endpoints ----------
