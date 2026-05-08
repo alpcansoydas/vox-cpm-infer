@@ -60,7 +60,7 @@ class VoxCPMDemo:
         print("Loading VoxCPM model before starting Gradio...", file=sys.stderr)
         model_dir = self._resolve_model_dir()
         print(f"Using model dir: {model_dir}", file=sys.stderr)
-        model = voxcpm.VoxCPM(voxcpm_model_path=model_dir)
+        model = voxcpm.VoxCPM(voxcpm_model_path=model_dir, optimize=False)
         if self.device == "cuda":
             torch.cuda.synchronize()
         print("Model loaded successfully.", file=sys.stderr)

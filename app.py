@@ -264,7 +264,7 @@ class VoxCPMDemo:
         logger.info(f"Loading model: {self._model_id}")
         model = voxcpm.VoxCPM.from_pretrained(
             self._model_id,
-            optimize=True,
+            optimize=False,
         )
         if self.device == "cuda":
             torch.cuda.synchronize()
