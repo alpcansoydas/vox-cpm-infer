@@ -24,6 +24,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_FIRST_STREAMING_AUDIO_CHUNK_SECONDS = 0.35
+_STEADY_STREAMING_AUDIO_CHUNK_SECONDS = 1.0
+
 # ---------- Inline i18n (en + zh-CN only) ----------
 
 _USAGE_INSTRUCTIONS_EN = (
@@ -487,14 +490,57 @@ class VoxCPMDemo:
         )
         start_time = time.perf_counter()
         first_token_latency = None
+        sample_rate = current_model.tts_model.sample_rate
+        first_chunk_samples = int(sample_rate * _FIRST_STREAMING_AUDIO_CHUNK_SECONDS)
+        steady_chunk_samples = int(sample_rate * _STEADY_STREAMING_AUDIO_CHUNK_SECONDS)
+        target_chunk_samples = first_chunk_samples
+        emitted_first_audio = False
+        chunk_buffer: list[np.ndarray] = []
+        buffered_samples = 0
         for chunk in current_model.generate_streaming(**generate_kwargs):
             if first_token_latency is None:
                 first_token_latency = time.perf_counter() - start_time
+
+            chunk = np.asarray(chunk)
+            if chunk.size == 0:
+                continue
+
+            chunk_buffer.append(chunk)
+            buffered_samples += chunk.shape[0]
+            while buffered_samples >= target_chunk_samples:
+                wav_chunk, chunk_buffer, buffered_samples = self._pop_buffered_audio(
+                    chunk_buffer,
+                    buffered_samples,
+                    target_chunk_samples,
+                )
+                yield (
+                    self._encode_wav_chunk(sample_rate, wav_chunk),
+                    first_token_latency,
+                    time.perf_counter() - start_time,
+                )
+                if not emitted_first_audio:
+                    emitted_first_audio = True
+                    target_chunk_samples = steady_chunk_samples
+
+        if chunk_buffer:
+            wav_chunk = np.concatenate(chunk_buffer, axis=0)
             yield (
-                self._encode_wav_chunk(current_model.tts_model.sample_rate, chunk),
+                self._encode_wav_chunk(sample_rate, wav_chunk),
                 first_token_latency,
                 time.perf_counter() - start_time,
             )
+
+    @staticmethod
+    def _pop_buffered_audio(
+        chunk_buffer: list[np.ndarray],
+        buffered_samples: int,
+        target_samples: int,
+    ) -> tuple[np.ndarray, list[np.ndarray], int]:
+        wav = np.concatenate(chunk_buffer, axis=0)
+        wav_chunk = wav[:target_samples]
+        remainder = wav[target_samples:]
+        next_buffer = [remainder] if remainder.size else []
+        return wav_chunk, next_buffer, buffered_samples - target_samples
 
     @staticmethod
     def _encode_wav_chunk(sample_rate: int, wav: np.ndarray) -> bytes:
