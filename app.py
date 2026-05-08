@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import io
+import inspect
 import logging
 import time
 import numpy as np
@@ -319,6 +320,27 @@ class VoxCPMDemo:
             generate_kwargs["prompt_text"] = prompt_text_clean
         return generate_kwargs
 
+    def _filter_supported_generate_kwargs(self, model: voxcpm.VoxCPM, generate_kwargs: dict) -> dict:
+        generate_fn = getattr(model, "_generate", None)
+        if generate_fn is None:
+            return generate_kwargs
+        try:
+            signature = inspect.signature(generate_fn)
+        except (TypeError, ValueError):
+            return generate_kwargs
+        if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return generate_kwargs
+
+        supported = set(signature.parameters)
+        filtered_kwargs = {key: value for key, value in generate_kwargs.items() if key in supported}
+        dropped = sorted(set(generate_kwargs) - set(filtered_kwargs))
+        if dropped:
+            logger.warning(
+                "Ignoring unsupported VoxCPM generation option(s) for this installed backend: %s",
+                ", ".join(dropped),
+            )
+        return filtered_kwargs
+
     def _prepare_generate_kwargs(
         self,
         text_input: str,
@@ -383,6 +405,7 @@ class VoxCPMDemo:
             trim_silence_vad=trim_silence_vad,
             streaming_prefix_len=streaming_prefix_len,
         )
+        generate_kwargs = self._filter_supported_generate_kwargs(current_model, generate_kwargs)
         return current_model, generate_kwargs
 
     def generate_tts_audio(
