@@ -204,8 +204,8 @@ sf.write("streaming.wav", wav, model.tts_model.sample_rate)
 ### Low-Latency Web UI
 
 For lower first-audio latency than the Gradio media player path, run the FastAPI
-WebSocket UI. It loads the models before the server starts and streams raw
-float32 PCM chunks to the browser Web Audio API.
+UI. It loads the models before the server starts and streams raw float32 PCM
+chunks over HTTP to the browser Web Audio API.
 
 ```bash
 python3 app_fastapi.py --port 8809

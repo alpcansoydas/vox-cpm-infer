@@ -1,6 +1,5 @@
 import argparse
 import inspect
-import json
 import logging
 import os
 import re
@@ -14,8 +13,8 @@ from typing import Optional
 import numpy as np
 import torch
 import uvicorn
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from funasr import AutoModel
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -162,35 +161,21 @@ def create_app(demo: VoxCPMFastAPIDemo) -> FastAPI:
             logger.warning("ASR failed: %s", exc)
             return JSONResponse({"text": ""}, status_code=500)
 
-    @app.websocket("/ws/generate")
-    async def websocket_generate(websocket: WebSocket):
-        await websocket.accept()
-        try:
-            payload = json.loads(await websocket.receive_text())
-            sample_rate = int(demo.voxcpm_model.tts_model.sample_rate)
-            await websocket.send_text(json.dumps({"type": "start", "sample_rate": sample_rate}))
+    @app.post("/stream")
+    async def stream(payload: dict):
+        sample_rate = int(demo.voxcpm_model.tts_model.sample_rate)
 
+        def iter_pcm():
             start = time.perf_counter()
-            sent_first_audio = False
             for wav in demo.stream_pcm(payload):
-                if not sent_first_audio:
-                    sent_first_audio = True
-                    await websocket.send_text(
-                        json.dumps({"type": "first_audio", "latency": time.perf_counter() - start})
-                    )
-                await websocket.send_bytes(wav.tobytes())
+                yield wav.tobytes()
+            logger.info("Finished HTTP PCM stream in %.3fs", time.perf_counter() - start)
 
-            await websocket.send_text(json.dumps({"type": "done", "total": time.perf_counter() - start}))
-        except WebSocketDisconnect:
-            logger.info("WebSocket client disconnected.")
-        except Exception as exc:
-            logger.exception("Generation failed.")
-            await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
-        finally:
-            try:
-                await websocket.close()
-            except RuntimeError:
-                pass
+        return StreamingResponse(
+            iter_pcm(),
+            media_type="application/octet-stream",
+            headers={"X-Sample-Rate": str(sample_rate)},
+        )
 
     return app
 
@@ -486,7 +471,7 @@ HTML = r"""
     const $ = (id) => document.getElementById(id);
     const logEl = $("log");
     const state = {
-      ws: null,
+      abortController: null,
       audioCtx: null,
       nextStartTime: 0,
       sampleRate: 24000,
@@ -613,7 +598,7 @@ HTML = r"""
     });
 
     $("stopBtn").addEventListener("click", () => {
-      if (state.ws) state.ws.close();
+      if (state.abortController) state.abortController.abort();
       resetPlaybackClock();
       setBusy(false);
       log("Stopped.");
@@ -630,10 +615,6 @@ HTML = r"""
         resetPlaybackClock();
         await syncUploads();
 
-        const protocol = location.protocol === "https:" ? "wss" : "ws";
-        const ws = new WebSocket(`${protocol}://${location.host}/ws/generate`);
-        ws.binaryType = "arraybuffer";
-        state.ws = ws;
         state.startedAt = performance.now();
 
         const payload = {
@@ -656,39 +637,47 @@ HTML = r"""
           streaming_prefix_len: Number($("prefixLen").value)
         };
 
-        ws.onopen = () => {
-          log("Streaming request sent.");
-          ws.send(JSON.stringify(payload));
-        };
-        ws.onmessage = (event) => {
-          if (typeof event.data === "string") {
-            const msg = JSON.parse(event.data);
-            if (msg.type === "start") {
-              state.sampleRate = msg.sample_rate;
-              $("meter").textContent = `Streaming at ${state.sampleRate} Hz`;
-              log(`Server stream started at ${state.sampleRate} Hz.`);
-            } else if (msg.type === "first_audio") {
-              $("firstLatency").textContent = `${msg.latency.toFixed(3)} s`;
-            } else if (msg.type === "done") {
-              $("totalTime").textContent = `${msg.total.toFixed(3)} s`;
-              log("Generation complete.");
-            } else if (msg.type === "error") {
-              log(`Error: ${msg.message}`);
-            }
-            return;
+        state.abortController = new AbortController();
+        log("Streaming request sent.");
+        const response = await fetch("/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: state.abortController.signal
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`Stream failed: HTTP ${response.status}`);
+        }
+
+        state.sampleRate = Number(response.headers.get("X-Sample-Rate")) || state.sampleRate;
+        $("meter").textContent = `Streaming at ${state.sampleRate} Hz`;
+        log(`HTTP PCM stream started at ${state.sampleRate} Hz.`);
+
+        const reader = response.body.getReader();
+        let gotFirstChunk = false;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          if (!gotFirstChunk) {
+            gotFirstChunk = true;
+            $("firstLatency").textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(3)} s`;
           }
-          schedulePcm(event.data);
-        };
-        ws.onerror = () => {
-          log("WebSocket error.");
-        };
-        ws.onclose = () => {
-          state.ws = null;
-          setBusy(false);
-        };
-      } catch (err) {
+          schedulePcm(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+        }
+
+        $("totalTime").textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(3)} s`;
+        log("Generation complete.");
+        state.abortController = null;
         setBusy(false);
-        log(err.message);
+      } catch (err) {
+        if (err.name === "AbortError") {
+          log("Stream aborted.");
+        } else {
+          log(err.message);
+        }
+        state.abortController = null;
+        setBusy(false);
       }
     });
   </script>
